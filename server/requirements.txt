@@ -1,0 +1,26 @@
+# ATS Resume Optimizer - Dependencies
+
+# LangChain ecosystem
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langchain-community>=0.3.0
+langgraph>=0.2.0
+
+# OpenAI client (for OpenRouter compatibility)
+openai>=1.0.0
+
+# Web framework
+streamlit>=1.28.0
+
+# Document parsing
+python-docx>=1.0.0
+pdfplumber>=0.10.0
+
+# Environment management
+python-dotenv>=1.0.0
+
+# Utilities
+requests>=2.31.0
+
+# Note: This system uses OpenRouter API (https://openrouter.ai)
+# Set OPENROUTER_API_KEY in your .env file

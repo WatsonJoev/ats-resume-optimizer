@@ -213,11 +213,11 @@ class ATSOrchestrator:
         user_skills: List[str] = None,
         job_metadata: Dict[str, str] = None,
         mode: str = "balanced",
-        max_iterations: int = 3,
-        save_results: bool = True
+        save_results: bool = True,
+        ats_weights: Dict[str, int] = None,
     ) -> Dict[str, Any]:
         """
-        Run the complete optimization workflow.
+        Run the simplified single-shot optimization workflow.
         
         Args:
             jd_text: Job description text
@@ -225,7 +225,6 @@ class ATSOrchestrator:
             user_skills: List of user's confirmed skills
             job_metadata: Job metadata (title, company, location, url)
             mode: Optimization mode (conservative, balanced, aggressive)
-            max_iterations: Maximum review iterations
             save_results: Whether to save results locally
             
         Returns:
@@ -233,24 +232,27 @@ class ATSOrchestrator:
         """
         job_metadata = job_metadata or {}
         user_skills = user_skills or []
-        
+
+        # Set ATS weights for tools (must sum to 100)
+        if ats_weights and sum(ats_weights.values()) == 100:
+            from tools import ats_tools
+            ats_tools._scorer_weights = ats_weights
+
         print("\n" + "="*60)
-        print("ATS RESUME OPTIMIZER - Starting Optimization")
+        print("ATS RESUME OPTIMIZER - Single Shot Optimization")
         print("="*60)
         
         if job_metadata:
             print(f"Job: {job_metadata.get('title', 'Unknown')} at {job_metadata.get('company', 'Unknown')}")
         print(f"Mode: {mode}")
-        print(f"Max iterations: {max_iterations}")
         print("="*60 + "\n")
         
-        # Run the master orchestration
-        result = self.master_agent.orchestrate_optimization(
+        # Run single-shot optimization
+        result = self.master_agent.single_shot_optimize(
             resume_text=resume_text,
             jd_text=jd_text,
             user_skills=user_skills,
-            mode=mode,
-            max_iterations=max_iterations
+            mode=mode
         )
         
         # Add metadata to result
@@ -274,7 +276,6 @@ class ATSOrchestrator:
         
         print("\n" + "="*60)
         print(f"OPTIMIZATION COMPLETE - Decision: {result['decision']}")
-        print(f"Iterations: {result['iterations']}")
         print("="*60 + "\n")
         
         return result

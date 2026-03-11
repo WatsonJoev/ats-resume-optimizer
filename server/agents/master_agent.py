@@ -115,7 +115,7 @@ Be strict but fair. The goal is a resume that is both optimized AND truthful."""
         original_resume: str,
         optimized_resume: str,
         jd_text: str,
-        user_skills: List[str] = None
+        user_skills: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Review an optimized resume.
@@ -168,112 +168,75 @@ Provide a comprehensive review with your decision and reasoning."""
             "review": response,
         }
     
-    def orchestrate_optimization(
+    def single_shot_optimize(
         self,
         resume_text: str,
         jd_text: str,
-        user_skills: List[str] = None,
-        mode: str = "balanced",
-        max_iterations: int = 3
+        user_skills: Optional[List[str]] = None,
+        mode: str = "balanced"
     ) -> Dict[str, Any]:
         """
-        Orchestrate the full optimization flow with review cycles.
+        Single-shot optimization without review cycles.
         
         Args:
             resume_text: Original resume text
             jd_text: Target job description
             user_skills: User's confirmed skills
             mode: Optimization mode
-            max_iterations: Maximum revision attempts
             
         Returns:
-            Dict with final results and history
+            Dict with final results
         """
         if not self._ats_agent or not self._resume_agent:
             return {
-                "error": "ATS and Resume agents must be set before orchestration",
+                "error": "ATS and Resume agents must be set before optimization",
                 "decision": "ERROR"
             }
         
-        history = []
-        current_resume = resume_text
+        print("[Master] Starting single-shot optimization...")
         
-        for iteration in range(max_iterations):
-            print(f"\n[Master] Iteration {iteration + 1}/{max_iterations}")
-            
-            # Step 1: ATS Evaluation
-            print("[Master] Running ATS evaluation...")
-            ats_result = self._ats_agent.evaluate(jd_text, current_resume, user_skills)
-            
-            # Step 2: Resume Optimization (only if not first iteration or score is low)
-            if iteration == 0:
-                print("[Master] Optimizing resume...")
-                optimization_result = self._resume_agent.optimize_resume(
-                    current_resume, jd_text, user_skills, mode
-                )
-                optimized_resume = optimization_result["optimized_content"]
-            else:
-                # Use feedback from previous review
-                print("[Master] Requesting revision based on feedback...")
-                revision_prompt = f"""Revise this resume based on the review feedback.
+        # Step 1: ATS Evaluation
+        print("[Master] Analyzing job description and resume...")
+        ats_result = self._ats_agent.evaluate(jd_text, resume_text, user_skills)
+        
+        # Step 2: Resume Optimization
+        print("[Master] Optimizing resume for ATS 90+ score...")
+        optimization_result = self._resume_agent.optimize_resume(
+            resume_text, jd_text, user_skills, mode
+        )
+        optimized_resume = optimization_result["optimized_content"]
+        
+        # Step 3: Quick validation
+        print("[Master] Validating optimized resume...")
+        validation_prompt = f"""Quick validate this optimized resume for ATS optimization:
 
-CURRENT RESUME:
-{current_resume}
+ORIGINAL RESUME:
+{resume_text[:1000]}...
 
-REVIEW FEEDBACK:
-{history[-1]['review']}
+OPTIMIZED RESUME:
+{optimized_resume[:1000]}...
 
 JOB DESCRIPTION:
-{jd_text}
+{jd_text[:1000]}...
 
-Address all issues mentioned in the feedback while maintaining accuracy."""
-                
-                optimized_resume = self._resume_agent.invoke(revision_prompt)
-            
-            # Step 3: Master Review
-            print("[Master] Reviewing optimization...")
-            review_result = self.review(
-                resume_text,  # Always compare to original
-                optimized_resume,
-                jd_text,
-                user_skills
-            )
-            
-            history.append({
-                "iteration": iteration + 1,
-                "ats_analysis": ats_result["analysis"][:500] + "...",  # Truncate for history
-                "review": review_result["review"],
-                "decision": review_result["decision"],
-            })
-            
-            if review_result["decision"] == "APPROVED":
-                print("[Master] Resume APPROVED!")
-                return {
-                    "decision": "APPROVED",
-                    "final_resume": optimized_resume,
-                    "iterations": iteration + 1,
-                    "history": history,
-                    "original_resume": resume_text,
-                }
-            elif review_result["decision"] == "REJECTED":
-                print("[Master] Resume REJECTED - returning original")
-                return {
-                    "decision": "REJECTED",
-                    "final_resume": resume_text,  # Return original
-                    "iterations": iteration + 1,
-                    "history": history,
-                    "reason": review_result["review"],
-                }
-            else:
-                print("[Master] Revision needed...")
-                current_resume = optimized_resume
+Check for:
+1. No fabricated content
+2. Natural keyword integration
+3. Professional formatting preserved
+4. Target 90+ ATS score
+
+Respond with: APPROVED or NEEDS_REVISION + brief reason if any issues."""
         
-        # Max iterations reached
-        print("[Master] Max iterations reached")
+        validation = self.invoke(validation_prompt)
+        decision = "APPROVED" if "APPROVED" in validation.upper() else "NEEDS_REVISION"
+        
+        print(f"[Master] Validation: {decision}")
+        
         return {
-            "decision": "MAX_ITERATIONS",
-            "final_resume": current_resume,
-            "iterations": max_iterations,
-            "history": history,
-            "note": "Maximum revision attempts reached. Review the latest version.",
+            "decision": decision,
+            "final_resume": optimized_resume,
+            "iterations": 1,
+            "validation": validation,
+            "original_resume": resume_text,
+            "ats_analysis": ats_result["analysis"][:500] + "..." if "analysis" in ats_result else "ATS analysis complete"
         }

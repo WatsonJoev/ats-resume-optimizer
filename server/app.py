@@ -77,7 +77,14 @@ def init_session_state():
     """Initialize session state variables."""
     if "storage" not in st.session_state:
         st.session_state.storage = LocalStorage()
-    
+
+    if "ats_weights" not in st.session_state:
+        from config import get_settings
+        st.session_state.ats_weights = get_settings().ats_weights.copy()
+
+    if "original_resume" not in st.session_state:
+        st.session_state.original_resume = None
+
     if "resume_text" not in st.session_state:
         # Try to load baseline resume (supports .docx, .pdf, .txt)
         baseline = st.session_state.storage.get_baseline_resume()
@@ -125,23 +132,40 @@ def render_sidebar():
             help="Conservative: Minimal changes. Balanced: Moderate optimization. Aggressive: Maximum keyword alignment."
         )
         st.session_state.mode = mode
-        
-        # Max iterations
-        max_iter = st.slider(
-            "Max Review Iterations",
-            min_value=1,
-            max_value=5,
-            value=3,
-            help="Maximum number of revision cycles before accepting result."
-        )
-        st.session_state.max_iterations = max_iter
+
+        # ATS Weights (must sum to 100)
+        st.markdown("#### ATS Scoring Weights")
+        weights = st.session_state.ats_weights
+        w1 = st.slider("Keyword Match %", 10, 50, weights.get("keyword_match", 35), 5, key="w_kw")
+        w2 = st.slider("Skills Alignment %", 10, 40, weights.get("skills_alignment", 25), 5, key="w_skills")
+        w3 = st.slider("Experience Relevance %", 5, 35, weights.get("experience_relevance", 20), 5, key="w_exp")
+        w4 = st.slider("Formatting %", 0, 20, weights.get("formatting", 10), 5, key="w_fmt")
+        w5 = st.slider("Completeness %", 0, 20, weights.get("completeness", 10), 5, key="w_comp")
+        total = w1 + w2 + w3 + w4 + w5
+        if total != 100:
+            st.caption(f"⚠️ Weights sum to {total} (should be 100)")
+        else:
+            st.session_state.ats_weights = {
+                "keyword_match": w1, "skills_alignment": w2,
+                "experience_relevance": w3, "formatting": w4, "completeness": w5,
+            }
+
+        # Single-shot optimization info
+        st.info("🚀 **Single-Shot Optimization**: Automatically optimizes your resume in one pass for 90+ ATS score")
         
         st.markdown("---")
         
         # Saved jobs
         st.markdown("### Saved Jobs")
+        job_search = st.text_input("Search by company or title", key="job_search", placeholder="e.g. Google, Engineer")
         jobs = st.session_state.storage.list_jobs()
-        
+        if job_search and job_search.strip():
+            q = job_search.strip().lower()
+            jobs = [
+                j for j in jobs
+                if q in (j.get("metadata", {}).get("company", "") or "").lower()
+                or q in (j.get("metadata", {}).get("title", "") or "").lower()
+            ]
         if jobs:
             for job in jobs[:5]:  # Show last 5
                 metadata = job.get("metadata", {})
@@ -271,7 +295,7 @@ def render_input_section():
         # Always show the text area with current resume content
         resume_text = st.text_area(
             "Resume Content" if resume_source != "Paste Text" else "Paste your resume here",
-            value=st.session_state.resume_text,
+            value=st.session_state.resume_text or "",
             height=350,
             placeholder="Resume content will appear here after loading...",
             key="resume_input"
@@ -282,7 +306,7 @@ def render_input_section():
         col_save1, col_save2 = st.columns(2)
         with col_save1:
             if st.button("Save as Baseline", key="save_baseline_btn"):
-                if resume_text.strip():
+                if resume_text and resume_text.strip():
                     st.session_state.storage.save_baseline_resume(resume_text)
                     st.success("Baseline resume saved!")
                 else:
@@ -344,7 +368,7 @@ def render_quick_score():
             return
         
         with st.spinner("Calculating ATS score..."):
-            scorer = ATSScorer()
+            scorer = ATSScorer(weights=st.session_state.get("ats_weights"))
             report = scorer.calculate_score(
                 st.session_state.jd_text,
                 st.session_state.resume_text,
@@ -411,7 +435,7 @@ def render_optimization_section():
         st.caption(f"Mode: {st.session_state.get('mode', 'balanced')}")
     
     with col3:
-        st.caption(f"Max iterations: {st.session_state.get('max_iterations', 3)}")
+        st.caption("Single-shot: 1 pass")
     
     if optimize_btn:
         if not st.session_state.jd_text.strip():
@@ -420,7 +444,10 @@ def render_optimization_section():
         if not st.session_state.resume_text.strip():
             st.warning("Please enter your resume.")
             return
-        
+
+        # Store original for diff view
+        st.session_state.original_resume = st.session_state.resume_text
+
         # Run optimization
         with st.spinner("Initializing agents..."):
             try:
@@ -444,8 +471,8 @@ def render_optimization_section():
                 user_skills=st.session_state.user_skills,
                 job_metadata=st.session_state.get("job_metadata", {}),
                 mode=st.session_state.get("mode", "balanced"),
-                max_iterations=st.session_state.get("max_iterations", 3),
-                save_results=True
+                save_results=True,
+                ats_weights=st.session_state.get("ats_weights"),
             )
             
             progress_bar.progress(100)
@@ -480,10 +507,10 @@ def render_optimization_results():
     else:
         st.warning(f"Decision: {decision}")
     
-    st.caption(f"Completed in {result.get('iterations', 'N/A')} iteration(s)")
+        st.caption("Completed in single optimization pass")
     
     # Tabs for different views
-    tab1, tab2, tab3 = st.tabs(["Optimized Resume", "Review History", "Download"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Optimized Resume", "Review History", "Download", "View Changes"])
     
     with tab1:
         final_resume = result.get("final_resume", "")
@@ -512,57 +539,50 @@ def render_optimization_results():
         job_hash = result.get("job_hash", "")
         
         if final_resume:
-            st.markdown("#### Download Optimized Resume")
-            
+            st.markdown("#### Download Optimized Resume (all formats)")
             col_dl1, col_dl2, col_dl3 = st.columns(3)
-            
             with col_dl1:
-                st.download_button(
-                    label="Download TXT",
-                    data=final_resume,
-                    file_name="optimized_resume.txt",
-                    mime="text/plain",
-                    key="download_txt"
-                )
-            
+                st.download_button("Download TXT", data=final_resume, file_name="optimized_resume.txt", mime="text/plain", key="download_txt")
             with col_dl2:
-                st.download_button(
-                    label="Download Markdown",
-                    data=final_resume,
-                    file_name="optimized_resume.md",
-                    mime="text/markdown",
-                    key="download_md"
-                )
-            
+                st.download_button("Download Markdown", data=final_resume, file_name="optimized_resume.md", mime="text/markdown", key="download_md")
             with col_dl3:
-                # Try to load DOCX file if it exists
                 if job_hash:
-                    from pathlib import Path
                     job_dir = st.session_state.storage.settings.jobs_dir / job_hash
                     docx_files = list(job_dir.glob("resume_v*.docx"))
-                    
                     if docx_files:
-                        latest_docx = sorted(docx_files)[-1]
-                        with open(latest_docx, "rb") as f:
+                        with open(sorted(docx_files)[-1], "rb") as f:
                             docx_data = f.read()
-                        
-                        st.download_button(
-                            label="Download DOCX",
-                            data=docx_data,
-                            file_name="optimized_resume.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            key="download_docx"
-                        )
+                        st.download_button("Download DOCX", data=docx_data, file_name="optimized_resume.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", key="download_docx")
                     else:
                         st.caption("DOCX not available")
                 else:
                     st.caption("DOCX not available")
-            
-            st.markdown("---")
-            st.markdown("**Tip:** DOCX format is best for ATS systems. Most job portals accept .docx files.")
+            st.caption("DOCX format is best for ATS systems.")
         
         if result.get("saved_to"):
-            st.info(f"Files saved to: {result['saved_to']}")
+            st.info(f"Files saved to: {result['saved_to']")
+
+    with tab4:
+        # Before/after diff view
+        orig = st.session_state.get("original_resume", "")
+        final = result.get("final_resume", "")
+        if orig and final:
+            import difflib
+            diff = difflib.unified_diff(
+                orig.splitlines(keepends=True),
+                final.splitlines(keepends=True),
+                fromfile="Original",
+                tofile="Optimized",
+                lineterm="",
+            )
+            diff_text = "".join(diff)
+            if diff_text:
+                st.markdown("#### Changes (unified diff)")
+                st.code(diff_text, language="diff")
+            else:
+                st.info("No changes detected.")
+        else:
+            st.info("Original resume not available for comparison.")
 
 
 def main():

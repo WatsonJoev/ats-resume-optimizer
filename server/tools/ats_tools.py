@@ -15,8 +15,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from services.ats_scorer import ATSScorer
 
 
-# Global scorer instance
-_scorer = ATSScorer()
+# Optional weights override (set by orchestrator before optimize)
+_scorer_weights = None
+
+
+def _get_scorer():
+    """Get scorer with current weights (from config or override)."""
+    return ATSScorer(weights=_scorer_weights) if _scorer_weights else ATSScorer()
 
 
 @tool
@@ -30,8 +35,9 @@ def analyze_job_description(jd_text: str) -> str:
     Returns:
         JSON string with extracted requirements and keywords
     """
-    requirements = _scorer.extract_jd_requirements(jd_text)
-    keywords = list(_scorer.extract_keywords(jd_text))
+    scorer = _get_scorer()
+    requirements = scorer.extract_jd_requirements(jd_text)
+    keywords = list(scorer.extract_keywords(jd_text))
     
     result = {
         "requirements": requirements,
@@ -56,9 +62,9 @@ def calculate_ats_score(jd_text: str, resume_text: str, user_skills: str = "") -
         JSON string with detailed ATS score breakdown
     """
     skills_list = [s.strip() for s in user_skills.split(",") if s.strip()] if user_skills else []
-    
-    report = _scorer.calculate_score(jd_text, resume_text, skills_list)
-    result = _scorer.to_dict(report)
+    scorer = _get_scorer()
+    report = scorer.calculate_score(jd_text, resume_text, skills_list)
+    result = scorer.to_dict(report)
     
     return json.dumps(result, indent=2)
 
@@ -75,7 +81,7 @@ def identify_keyword_gaps(jd_text: str, resume_text: str) -> str:
     Returns:
         JSON string with missing and matched keywords
     """
-    analysis = _scorer.analyze_keywords(jd_text, resume_text)
+    analysis = _get_scorer().analyze_keywords(jd_text, resume_text)
     
     result = {
         "matched_keywords": analysis.matched,
@@ -100,9 +106,10 @@ def generate_keyword_map(jd_text: str, resume_text: str) -> str:
     Returns:
         JSON string mapping keywords to recommended resume sections
     """
-    requirements = _scorer.extract_jd_requirements(jd_text)
-    jd_keywords = _scorer.extract_keywords(jd_text)
-    resume_keywords = _scorer.extract_keywords(resume_text)
+    scorer = _get_scorer()
+    requirements = scorer.extract_jd_requirements(jd_text)
+    jd_keywords = scorer.extract_keywords(jd_text)
+    resume_keywords = scorer.extract_keywords(resume_text)
     
     # Map keywords to sections
     keyword_map = {
@@ -113,7 +120,7 @@ def generate_keyword_map(jd_text: str, resume_text: str) -> str:
     }
     
     # Technical skills go to skills section
-    tech_skills = jd_keywords & _scorer.TECH_SKILLS
+    tech_skills = jd_keywords & scorer.TECH_SKILLS
     missing_tech = tech_skills - resume_keywords
     keyword_map["skills_section"] = list(missing_tech)
     
